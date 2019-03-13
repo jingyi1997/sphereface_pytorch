@@ -13,7 +13,7 @@ import numpy as np
 import zipfile
 
 from dataset import ImageDataset
-import net_sphere
+import net_sphere_2
 
 from apex.parallel import DistributedDataParallel as DDP 
 
@@ -59,8 +59,8 @@ parser.add_argument('--loss_type', default='softmax', type=str)
 args = parser.parse_args()
 
 predicts=[]
-net = getattr(net_sphere,args.net)(head=args.loss_type)
-model_name = 'iter_'+str(args.model)+'_ckpt.pth.tar'
+net = getattr(net_sphere_2,args.net)(head=args.loss_type)
+model_name = 'epoch_'+str(args.model)+'_ckpt.pth.tar'
 model_path = os.path.join(args.ckpt, 'checkpoints', model_name)
 checkpoint = torch.load(model_path)['state_dict']
 net.cuda()
@@ -70,6 +70,7 @@ for k, v in checkpoint.items():
   name = k[7:]
   new_state_dict[name] = v
 net.load_state_dict(new_state_dict)
+#net.load_state_dict(torch.load(model_path))
 net.eval()
 net.feature = True
 
@@ -123,4 +124,8 @@ for idx, (train, test) in enumerate(folds):
     best_thresh = find_best_threshold(thresholds, cos_predicts[train])
     accuracy.append(eval_acc(best_thresh, cos_predicts[test]))
     thd.append(best_thresh)
-print('LFWACC={:.4f} std={:.4f} thd={:.4f}'.format(np.mean(accuracy), np.std(accuracy), np.mean(thd)))
+if not os.path.exists('{}/results'.format(args.ckpt)):
+    os.makedirs('{}/results'.format(args.ckpt))
+result_file = open('{}/results/performance.txt'.format(args.ckpt), 'a')
+line = 'epoch={} LFWACC={:.4f} std={:.4f} thd={:.4f}'.format(args.model, np.mean(accuracy), np.std(accuracy), np.mean(thd))
+result_file.write(line + '\n')

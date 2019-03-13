@@ -122,13 +122,13 @@ def reduce_tensor(tensor, world_size):
     return rt
 
     
-def adjust_learning_rate(optimizer, iter, args):
+def adjust_learning_rate(optimizer,epoch, args):
     """LR schedule that should yield 76% converged accuracy with batch size 256"""
     local_steps = np.copy(args.lr_steps)
     local_steps = np.insert(local_steps, 0, 0)
-    local_steps = np.insert(local_steps, -1, args.iters)
+    local_steps = np.append(local_steps, args.epochs)
     for i in range(len(local_steps)-1): 
-        if iter >= local_steps[i] and iter < local_steps[i+1]:
+        if epoch >= local_steps[i] and epoch < local_steps[i+1]:
             factor = i
             break
 

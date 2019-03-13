@@ -31,11 +31,11 @@ parser.add_argument('--data_dir', default='/mnt/lustre/xujingyi/sphereface/prepr
 parser.add_argument('--data_list', default='/mnt/lustre/xujingyi/sphereface/preprocess/result/webface.txt', type=str)
 parser.add_argument('--loss_type', default='softmax', type=str)
 parser.add_argument('--reg_weight', default=0.006, type=float)
-parser.add_argument('--iters', default=14000, type=int)
+parser.add_argument('--epochs', default=20, type=int)
 parser.add_argument('--save_freq', default=1000, type=str)
 parser.add_argument('--print_freq', default=10, type=int)
 parser.add_argument('--resume', default=None, type=int)
-parser.add_argument('--lr_steps', default=[16000, 24000], type=int)
+parser.add_argument('--lr_steps', default=[10, 15, 18], type=int)
 parser.add_argument('--lr_mults', default=0.1, type=float)
 args = parser.parse_args()
 use_cuda = torch.cuda.is_available()
@@ -91,94 +91,101 @@ def main():
         criterion = torch.nn.CrossEntropyLoss()
     if args.loss_type == 'regular':
         criterion = torch.nn.CrossEntropyLoss()
-    start_iter = 0
+    start_epoch = 0
     # optionally resume from a pretrained model
     if args.resume:
-        model_name = 'iter_'+str(args.resume)+'_ckpt.pth.tar'
+        model_name = 'epoch_'+str(args.resume)+'_ckpt.pth.tar'
         model_path = os.path.join(args.ckpt, 'checkpoints', model_name)
         checkpoint = torch.load(model_path)
-        start_iter = int(checkpoint['iter'])
+        start_epoch = int(checkpoint['epoch'])
         net.load_state_dict(checkpoint['state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer'])
-    
+
     ## start training 
     net.train()
     prefetcher = DataPrefetcher(train_loader)
     freq = args.print_freq
     end = time.time()
     
-    for iter in range(start_iter,args.iters):
-      if iter % args.save_freq == 0:
-         epoch = int(iter / len(train_loader))
-         train_sampler.set_epoch(epoch)
-         losses = AverageMeter(freq)
-         data_time = AverageMeter(freq)
-         batch_time = AverageMeter(freq)
-         top1 = AverageMeter(freq)
-         top5 = AverageMeter(freq)
-      input, target = prefetcher.next()
-      if input is None:
-         prefetcher = DataPrefetcher(train_loader)
-         input, target = prefetcher.next()
-      
-      
-      lr = adjust_learning_rate(optimizer, iter, args)
+    for epoch in range(start_epoch,args.epochs):
+      train_sampler.set_epoch(epoch)
+      train(net, epoch, train_loader, args, criterion, optimizer)
+      if rank == 0:
+             save_checkpoint({
+               'epoch': epoch+1,
+               'state_dict': net.state_dict(),
+               'optimizer': optimizer.state_dict()
+               },args,'epoch_'+str(epoch+1)+'_ckpt.pth.tar')
 
-      data_time.update(time.time() - end)
-      output = net(input)
 
-      
-    
-      if args.loss_type == 'softmax':
-          loss = criterion(output, target)
-          prec1, prec5 = accuracy(output.data, target, topk=(1,5))
-      if args.loss_type == 'a-softmax':
-          loss = criterion(output, target)
-          prec1, prec5 = accuracy(output[0].data, target, topk=(1,5))
-      if args.loss_type == 'regular':
-          cos_theta, regular_loss = output
-          loss = criterion(cos_theta, target)
-          loss = loss + args.reg_weight * regular_loss
-          prec1, prec5 = accuracy(cos_theta.data, target, topk=(1,5))
+def train(net, epoch,train_loader, args, criterion, optimizer):
+      freq = args.print_freq
+      losses = AverageMeter(freq)
+      data_time = AverageMeter(freq)
+      batch_time = AverageMeter(freq)
+      top1 = AverageMeter(freq)
+      top5 = AverageMeter(freq)
 
-      reduced_loss  = reduce_tensor(loss.data, world_size)
-      prec1 = reduce_tensor(prec1, world_size)
-      prec5 = reduce_tensor(prec5, world_size)
-
-      losses.update(to_python_float(reduced_loss))
-      top1.update(to_python_float(prec1))
-      top5.update(to_python_float(prec5))
-        
-      optimizer.zero_grad()
-      loss.backward()
-      optimizer.step()
-
-      torch.cuda.synchronize()
-
-      batch_time.update(time.time() - end)
-
+      net.train()
       end = time.time()
+
+      prefetcher = DataPrefetcher(train_loader)
       input, target = prefetcher.next()
-          
-      if rank == 0 and iter % args.print_freq == 0 and iter > 1:
-          logger = logging.getLogger('global_logger')
-          logger.info('Iter: [{0}/{1}]\t'
-                  'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-                  'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
-                  'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
-                  'Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t'
-                  'Prec@5 {top5.val:.3f} ({top5.avg:.3f})\t'
-                  'LR {lr:.3f}'.format(
-                   iter, args.iters,
-                   batch_time=batch_time,
-                   data_time=data_time, loss=losses, top1=top1, top5=top5, lr=lr))
+      i = -1      
       
-      if rank == 0 and (iter+1) % args.save_freq == 0 and iter > 1:
-         save_checkpoint({
-           'iter': iter+1,
-           'state_dict': net.state_dict(),
-           'optimizer': optimizer.state_dict()
-           },args,'iter_'+str(iter+1)+'_ckpt.pth.tar')
+      while input is not None:
+          i += 1
+          lr = adjust_learning_rate(optimizer, epoch, args)
+
+          data_time.update(time.time() - end)
+          output = net(input)
+
+          
+    
+          if args.loss_type == 'softmax':
+              loss = criterion(output, target)
+              prec1, prec5 = accuracy(output.data, target, topk=(1,5))
+          if args.loss_type == 'a-softmax':
+              loss = criterion(output, target)
+              prec1, prec5 = accuracy(output[0].data, target, topk=(1,5))
+          if args.loss_type == 'regular':
+              cos_theta, regular_loss = output
+              loss = criterion(cos_theta, target)
+              loss = loss + args.reg_weight * regular_loss
+              prec1, prec5 = accuracy(cos_theta.data, target, topk=(1,5))
+
+          reduced_loss  = reduce_tensor(loss.data, world_size)
+          prec1 = reduce_tensor(prec1, world_size)
+          prec5 = reduce_tensor(prec5, world_size)
+
+          losses.update(to_python_float(reduced_loss))
+          top1.update(to_python_float(prec1))
+          top5.update(to_python_float(prec5))
+            
+          optimizer.zero_grad()
+          loss.backward()
+          optimizer.step()
+
+          torch.cuda.synchronize()
+
+          batch_time.update(time.time() - end)
+
+          end = time.time()
+          input, target = prefetcher.next()
+              
+          if rank == 0 and i % args.print_freq == 0 and i > 1:
+              logger = logging.getLogger('global_logger')
+              logger.info('Epoch: [{0}]/[{1}/{2}]\t'
+                      'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+                      'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
+                      'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
+                      'Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t'
+                      'Prec@5 {top5.val:.3f} ({top5.avg:.3f})\t'
+                      'LR {lr:.3f}'.format(
+                       epoch, i, len(train_loader),
+                       batch_time=batch_time,
+                       data_time=data_time, loss=losses, top1=top1, top5=top5, lr=lr))
+          
 
   
 
