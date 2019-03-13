@@ -129,7 +129,7 @@ class AngleLoss(nn.Module):
 
 
 class sphere20a(nn.Module):
-    def __init__(self,classnum=10575,feature=False,head='softmax'):
+    def __init__(self,classnum=10574,feature=False,head='softmax'):
         super(sphere20a, self).__init__()
         self.classnum = classnum
         self.feature = feature

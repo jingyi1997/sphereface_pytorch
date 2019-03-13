@@ -15,11 +15,14 @@ def pil_loader(img_str):
     return img
  
 class McDataset(Dataset):
-    def __init__(self, root_dir, meta_file, transform=None, fake=False):
+    def __init__(self, root_dir, meta_file, transform=None, fake=False, distributed=False):
         self.root_dir = root_dir
         self.transform = transform
         self.fake = fake
-        self.rank = dist.get_rank()
+        if distributed:
+          self.rank = dist.get_rank()
+        else:
+          self.rank =0
         with open(meta_file) as f:
             lines = f.readlines()
 

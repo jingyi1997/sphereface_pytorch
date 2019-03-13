@@ -28,13 +28,12 @@ def dataset_handle(name,filelist,result,callback,bs,pindex,freearr,arrimage,arrl
     imagelist = []
     labellist = []
     pathlist = []
-    nparrimage = np.frombuffer(arrimage.get_obj(),np.float32).reshape(10,len(arrimage)/10)
-    nparrlabel = np.frombuffer(arrlabel.get_obj(),np.float32).reshape(10,len(arrlabel)/10)
+    nparrimage = np.frombuffer(arrimage.get_obj(),np.float32).reshape(10,int(len(arrimage)/10))
+    nparrlabel = np.frombuffer(arrlabel.get_obj(),np.float32).reshape(10,int(len(arrlabel)/10))
     while True:
         filename = filelist.get()
         if filename.endswith('\n'): filename=filename[:-1]
         if filename=='FINISH': break
-
         data = callback(name,filename,pindex,cacheobj,zfile)
         if data is not None:
             imagelist.append(data[0])
@@ -57,8 +56,8 @@ class ImageDataset(object):
 
         self.arrimage = Array(ctypes.c_float, 10*bs*3*imagesize*imagesize)
         self.arrlabel = Array(ctypes.c_float, 10*bs*3*imagesize*imagesize)
-        self.nparrimage = np.frombuffer(self.arrimage.get_obj(),np.float32).reshape(10,len(self.arrimage)/10)
-        self.nparrlabel = np.frombuffer(self.arrlabel.get_obj(),np.float32).reshape(10,len(self.arrlabel)/10)
+        self.nparrimage = np.frombuffer(self.arrimage.get_obj(),np.float32).reshape(10,int(len(self.arrimage)/10))
+        self.nparrlabel = np.frombuffer(self.arrlabel.get_obj(),np.float32).reshape(10,int(len(self.arrlabel)/10))
 
         self.filelist = Queue()
         self.result   = Queue()
@@ -101,7 +100,6 @@ class ImageDataset(object):
             self.filelist.put(filepath)
             if maxlistnum is not None: maxlistnum -= 1
             if maxlistnum==0: break 
-
         for i in range(nthread):
             self.filelist.put('FINISH')
             p = Process(target=dataset_handle, args=(self.name,self.filelist,self.result,self.callback,self.bs,i,

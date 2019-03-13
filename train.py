@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
+import torchvision
 from torch.autograd import Variable
 torch.backends.cudnn.bencmark = True
 
@@ -18,6 +19,7 @@ import net_sphere
 
 parser = argparse.ArgumentParser(description='PyTorch sphereface')
 parser.add_argument('--net','-n', default='sphere20a', type=str)
+parser.add_argument('--ckpt', default='experiment/release', type=str)
 parser.add_argument('--dataset', default='../../dataset/face/casia/casia.zip', type=str)
 parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
 parser.add_argument('--bs', default=256, type=int, help='')
@@ -40,10 +42,9 @@ def alignment(src_img,src_pts):
 
 
 def dataset_load(name,filename,pindex,cacheobj,zfile):
-    position = filename.rfind('.zip:')
-    zipfilename = filename[0:position+4]
-    nameinzip = filename[position+5:]
-
+    #position = filename.rfind('.zip:')
+    #zipfilename = filename[0:position+4]
+    nameinzip = filename
     split = nameinzip.split('\t')
     nameinzip = split[0]
     classid = int(split[1])
@@ -51,10 +52,11 @@ def dataset_load(name,filename,pindex,cacheobj,zfile):
     for i in range(5):
         src_pts.append([int(split[2*i+2]),int(split[2*i+3])])
 
-    data = np.frombuffer(zfile.read(nameinzip),np.uint8)
-    img = cv2.imdecode(data,1)
+    #data = np.frombuffer(zfile.read(nameinzip),np.uint8)
+    #img = cv2.imdecode(data,1)
+    img = cv2.imread(nameinzip, 1)
     img = alignment(img,src_pts)
-
+    
     if ':train' in name:
         if random.random()>0.5: img = cv2.flip(img,1)
         if random.random()>0.5:
@@ -127,6 +129,9 @@ def train(epoch,args):
     print('')
 
 
+# save checkpoints
+if os.path.exists('{}/checkpoints'.format(args.ckpt)) == False:
+    os.makedirs('{}/checkpoints'.format(args.ckpt))
 net = getattr(net_sphere,args.net)()
 # net.load_state_dict(torch.load('sphere20a_0.pth'))
 net.cuda()
@@ -140,7 +145,7 @@ for epoch in range(0, 20):
         optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
 
     train(epoch,args)
-    save_model(net, '{}_{}.pth'.format(args.net,epoch))
+    save_model(net, '{}/checkpoints/epoch_{}_ckpt.pth.tar'.format(args.ckpt,epoch))
 
 print('finish: time={}\n'.format(dt()))
 

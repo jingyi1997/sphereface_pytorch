@@ -120,7 +120,11 @@ accuracy = []
 thd = []
 folds = KFold(n=6000, n_folds=10, shuffle=False)
 thresholds = np.arange(-1.0, 1.0, 0.005)
-predicts = np.array(map(lambda line:line.strip('\n').split(), predicts))
+for line in predicts:
+    line = line.strip().split()
+    cos_predicts.append(line)
+cos_predicts = np.array(cos_predicts)
+print(cos_predicts.shape)
 for idx, (train, test) in enumerate(folds):
     best_thresh = find_best_threshold(thresholds, predicts[train])
     accuracy.append(eval_acc(best_thresh, predicts[test]))
