@@ -35,7 +35,8 @@ parser.add_argument('--epochs', default=20, type=int)
 parser.add_argument('--save_freq', default=1000, type=str)
 parser.add_argument('--print_freq', default=10, type=int)
 parser.add_argument('--resume', default=None, type=int)
-parser.add_argument('--lr_steps', default=[10, 15, 18], type=int)
+parser.add_argument('--distributed', default=False, type=bool)
+parser.add_argument('--lr_steps', nargs='+', type=int)
 parser.add_argument('--lr_mults', default=0.1, type=float)
 args = parser.parse_args()
 use_cuda = torch.cuda.is_available()
@@ -45,10 +46,13 @@ use_cuda = torch.cuda.is_available()
 def main():
 
     global  rank, world_size
-
-
-    rank, world_size = dist_init("1234")
-
+   
+    if args.distributed:
+      rank, world_size = dist_init("1234")
+    else:
+      rank = 0
+      world_size = 0
+      
     if rank == 0:
       if not os.path.exists('{}/checkpoints'.format(args.ckpt)):
          os.makedirs('{}/checkpoints'.format(args.ckpt))
@@ -68,7 +72,8 @@ def main():
     net = net.cuda()
     
     #net = nn.parallel.distributed.DistributedDataParallel(net)
-    net = DDP(net)
+    if args.distributed:
+       net = DDP(net)
     
     # build dataset
     data_dir = args.data_dir
@@ -77,7 +82,9 @@ def main():
     train_dataset = McDataset(data_dir, data_list, transforms.Compose([
             transforms.RandomHorizontalFlip()]))
 
-    train_sampler = distributed.DistributedSampler(train_dataset)
+    train_sampler = None
+    if args.distributed:
+       train_sampler = distributed.DistributedSampler(train_dataset)
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=args.bs, shuffle=(train_sampler is None),
         num_workers=4, pin_memory=True, sampler=train_sampler, collate_fn=fast_collate)
@@ -86,11 +93,11 @@ def main():
     optimizer = torch.optim.SGD(net.parameters(), lr=args.base_lr, momentum=0.9, weight_decay=5e-4)
  
     if args.loss_type == 'a-softmax':
-        criterion = net_sphere_2.AngleLoss()
+        criterion = net_sphere_2.AngleLoss().cuda()
     if args.loss_type == 'softmax':
-        criterion = torch.nn.CrossEntropyLoss()
+        criterion = torch.nn.CrossEntropyLoss().cuda()
     if args.loss_type == 'regular':
-        criterion = torch.nn.CrossEntropyLoss()
+        criterion = torch.nn.CrossEntropyLoss().cuda()
     start_epoch = 0
     # optionally resume from a pretrained model
     if args.resume:
@@ -154,9 +161,12 @@ def train(net, epoch,train_loader, args, criterion, optimizer):
               loss = loss + args.reg_weight * regular_loss
               prec1, prec5 = accuracy(cos_theta.data, target, topk=(1,5))
 
-          reduced_loss  = reduce_tensor(loss.data, world_size)
-          prec1 = reduce_tensor(prec1, world_size)
-          prec5 = reduce_tensor(prec5, world_size)
+          if args.distributed:
+             reduced_loss  = reduce_tensor(loss.data, world_size)
+             prec1 = reduce_tensor(prec1, world_size)
+             prec5 = reduce_tensor(prec5, world_size)
+          else:
+             reduced_loss = loss.data
 
           losses.update(to_python_float(reduced_loss))
           top1.update(to_python_float(prec1))
@@ -181,7 +191,7 @@ def train(net, epoch,train_loader, args, criterion, optimizer):
                       'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
                       'Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t'
                       'Prec@5 {top5.val:.3f} ({top5.avg:.3f})\t'
-                      'LR {lr:.3f}'.format(
+                      'LR {lr:.4f}'.format(
                        epoch, i, len(train_loader),
                        batch_time=batch_time,
                        data_time=data_time, loss=losses, top1=top1, top5=top5, lr=lr))
