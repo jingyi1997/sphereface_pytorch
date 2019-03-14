@@ -54,23 +54,29 @@ parser.add_argument('--net','-n', default='sphere20a', type=str)
 parser.add_argument('--lfw', default='../../dataset/face/lfw/lfw-112X96', type=str)
 parser.add_argument('--ckpt', default='experiment/softmax', type=str)
 parser.add_argument('--model', default=14000, type=int)
+parser.add_argument('--classnum', default=10575, type=int)
+parser.add_argument('--preprocess', default=False, type=bool)
 parser.add_argument('--loss_type', default='softmax', type=str)
+parser.add_argument('--distributed', default=False, type=bool)
 
 args = parser.parse_args()
 
 predicts=[]
-net = getattr(net_sphere_2,args.net)(classnum=10575, head=args.loss_type)
+net = getattr(net_sphere_2,args.net)(classnum=args.classnum,  head=args.loss_type)
 model_name = 'epoch_'+str(args.model)+'_ckpt.pth.tar'
 model_path = os.path.join(args.ckpt, 'checkpoints', model_name)
 #checkpoint = torch.load(model_path)['state_dict']
 net.cuda()
-#from collections import OrderedDict
-#new_state_dict = OrderedDict()
-#for k, v in checkpoint.items():
-#  name = k[7:]
-#  new_state_dict[name] = v
-#net.load_state_dict(new_state_dict)
-net.load_state_dict(torch.load(model_path))
+if args.distributed:
+  from collections import OrderedDict
+  new_state_dict = OrderedDict()
+  for k, v in checkpoint.items():
+   name = k[7:]
+   new_state_dict[name] = v
+  net.load_state_dict(new_state_dict)
+else:
+  checkpoint = torch.load(model_path)['state_dict']
+  net.load_state_dict(checkpoint)
 net.eval()
 net.feature = True
 
@@ -96,13 +102,15 @@ for i in range(6000):
     imglist = [img1,cv2.flip(img1,1),img2,cv2.flip(img2,1)]
     for j in range(len(imglist)):
         imglist[j] = imglist[j].transpose(2,0,1).reshape((1,3,112,96))
-        imglist[j][0][0] -= 0.485*255
-        imglist[j][0][1] -= 0.456*255
-        imglist[j][0][2] -= 0.406*255
-        imglist[j][0][0] /= 0.229*255
-        imglist[j][0][1] /= 0.224*255
-        imglist[j][0][2] /= 0.225*255
-    print(imglist[0][0][0][:3][:3])   
+        if args.preprocess:
+          imglist[j][0][0] -= 0.485*255
+          imglist[j][0][1] -= 0.456*255
+          imglist[j][0][2] -= 0.406*255
+          imglist[j][0][0] /= 0.229*255
+          imglist[j][0][1] /= 0.224*255
+          imglist[j][0][2] /= 0.225*255
+        else:
+          imglist[j] = (imglist[j]-127.5)/128.0
     img = np.vstack(imglist)
     img = Variable(torch.from_numpy(img).float(),volatile=True).cuda()
     output = net(img)

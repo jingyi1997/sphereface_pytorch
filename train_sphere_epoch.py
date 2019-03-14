@@ -46,7 +46,6 @@ use_cuda = torch.cuda.is_available()
 def main():
 
     global  rank, world_size
-   
     if args.distributed:
       rank, world_size = dist_init("1234")
     else:
@@ -115,7 +114,8 @@ def main():
     end = time.time()
     
     for epoch in range(start_epoch,args.epochs):
-      train_sampler.set_epoch(epoch)
+      if args.distributed:
+         train_sampler.set_epoch(epoch)
       train(net, epoch, train_loader, args, criterion, optimizer)
       if rank == 0:
              save_checkpoint({

@@ -34,7 +34,7 @@ def KFold(n=6000, n_folds=10, shuffle=False):
     folds = []
     base = list(range(n))
     for i in range(n_folds):
-        test = base[i*n/n_folds:(i+1)*n/n_folds]
+        test = base[int(i*n/n_folds):int((i+1)*n/n_folds)]
         train = list(set(base)-set(test))
         folds.append([train,test])
     return folds
@@ -65,17 +65,19 @@ def find_best_threshold(thresholds, predicts):
 parser = argparse.ArgumentParser(description='PyTorch sphereface lfw')
 parser.add_argument('--net','-n', default='sphere20a', type=str)
 parser.add_argument('--lfw', default='../../dataset/face/lfw/lfw.zip', type=str)
-parser.add_argument('--model','-m', default='sphere20a.pth', type=str)
+parser.add_argument('--model', default=18, type=int)
+parser.add_argument('--ckpt', default='experiment/release', type=str)
 args = parser.parse_args()
 
 predicts=[]
 net = getattr(net_sphere,args.net)()
-net.load_state_dict(torch.load(args.model))
+model_path = os.path.join(args.ckpt, 'checkpoints', 'epoch_'+str(args.model)+'_ckpt.pth.tar')
+net.load_state_dict(torch.load(model_path))
 net.cuda()
 net.eval()
 net.feature = True
 
-zfile = zipfile.ZipFile(args.lfw)
+#zfile = zipfile.ZipFile(args.lfw)
 
 landmark = {}
 with open('data/lfw_landmark.txt') as f:
@@ -98,9 +100,10 @@ for i in range(6000):
         sameflag = 0
         name1 = p[0]+'/'+p[0]+'_'+'{:04}.jpg'.format(int(p[1]))
         name2 = p[2]+'/'+p[2]+'_'+'{:04}.jpg'.format(int(p[3]))
-
-    img1 = alignment(cv2.imdecode(np.frombuffer(zfile.read(name1),np.uint8),1),landmark[name1])
-    img2 = alignment(cv2.imdecode(np.frombuffer(zfile.read(name2),np.uint8),1),landmark[name2])
+    #img1 = alignment(cv2.imdecode(np.frombuffer(zfile.read(name1),np.uint8),1),landmark[name1])
+    #img2 = alignment(cv2.imdecode(np.frombuffer(zfile.read(name2),np.uint8),1),landmark[name2])
+    img1 = alignment(cv2.imread(os.path.join(args.lfw, name1),1), landmark[name1])
+    img2 = alignment(cv2.imread(os.path.join(args.lfw, name2),1), landmark[name2])
 
     imglist = [img1,cv2.flip(img1,1),img2,cv2.flip(img2,1)]
     for i in range(len(imglist)):
@@ -120,13 +123,14 @@ accuracy = []
 thd = []
 folds = KFold(n=6000, n_folds=10, shuffle=False)
 thresholds = np.arange(-1.0, 1.0, 0.005)
+cos_predicts = []
 for line in predicts:
     line = line.strip().split()
     cos_predicts.append(line)
 cos_predicts = np.array(cos_predicts)
 print(cos_predicts.shape)
 for idx, (train, test) in enumerate(folds):
-    best_thresh = find_best_threshold(thresholds, predicts[train])
-    accuracy.append(eval_acc(best_thresh, predicts[test]))
+    best_thresh = find_best_threshold(thresholds, cos_predicts[train])
+    accuracy.append(eval_acc(best_thresh, cos_predicts[test]))
     thd.append(best_thresh)
 print('LFWACC={:.4f} std={:.4f} thd={:.4f}'.format(np.mean(accuracy), np.std(accuracy), np.mean(thd)))
