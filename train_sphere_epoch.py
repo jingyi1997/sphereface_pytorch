@@ -5,6 +5,7 @@ import torch
 print(torch.__version__)
 import torch.nn as nn
 import torch.optim as optim
+from torchvision.utils import save_image
 import torch.nn.functional as F
 from torch.utils.data import distributed
 from torch.autograd import Variable
@@ -35,9 +36,11 @@ parser.add_argument('--epochs', default=20, type=int)
 parser.add_argument('--save_freq', default=1000, type=str)
 parser.add_argument('--print_freq', default=10, type=int)
 parser.add_argument('--resume', default=None, type=int)
-parser.add_argument('--distributed', default=False, type=bool)
+parser.add_argument('--classnum', default=10574, type=int)
+parser.add_argument('--distributed', default=False, type=str)
 parser.add_argument('--lr_steps', nargs='+', type=int)
 parser.add_argument('--lr_mults', default=0.1, type=float)
+parser.add_argument('--radius', default=None, type=float)
 args = parser.parse_args()
 use_cuda = torch.cuda.is_available()
 
@@ -67,7 +70,7 @@ def main():
        logger = None
     # create model
     print("=> creating model '{}'".format(args.net))
-    net = getattr(net_sphere_2,args.net)(head=args.loss_type)
+    net = getattr(net_sphere_2,args.net)(classnum=args.classnum, head=args.loss_type, radius=args.radius)
     net = net.cuda()
     
     #net = nn.parallel.distributed.DistributedDataParallel(net)
@@ -145,6 +148,7 @@ def train(net, epoch,train_loader, args, criterion, optimizer):
           lr = adjust_learning_rate(optimizer, epoch, args)
 
           data_time.update(time.time() - end)
+          save_image(input, 'train.png')
           output = net(input)
 
           
@@ -185,17 +189,20 @@ def train(net, epoch,train_loader, args, criterion, optimizer):
               
           if rank == 0 and i % args.print_freq == 0 and i > 1:
               logger = logging.getLogger('global_logger')
-              logger.info('Epoch: [{0}]/[{1}/{2}]\t'
-                      'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-                      'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
-                      'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
-                      'Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t'
-                      'Prec@5 {top5.val:.3f} ({top5.avg:.3f})\t'
+              loss_info = 'Epoch: [{0}]/[{1}/{2}]\t' \
+                      'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t' \
+                      'Data {data_time.val:.3f} ({data_time.avg:.3f})\t' \
+                      'Loss {loss.val:.4f} ({loss.avg:.4f})\t' \
+                      'Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t' \
+                      'Prec@5 {top5.val:.3f} ({top5.avg:.3f})\t' \
                       'LR {lr:.4f}'.format(
                        epoch, i, len(train_loader),
                        batch_time=batch_time,
-                       data_time=data_time, loss=losses, top1=top1, top5=top5, lr=lr))
-          
+                       data_time=data_time, loss=losses, top1=top1, top5=top5, lr=lr)
+
+              if args.loss_type == 'regular':
+                      loss_info = loss_info + '\tReg Loss {regloss:.4f}'.format(regloss=regular_loss.data)
+              logger.info(loss_info)
 
   
 
