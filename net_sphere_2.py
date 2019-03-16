@@ -58,10 +58,11 @@ class AngleLinear(nn.Module):
 
 
 class RegularLinear(nn.Module):
-    def __init__(self, in_features, out_features):
+    def __init__(self, in_features, out_features, radius=None):
         super(RegularLinear, self).__init__()
         self.in_features = in_features
         self.out_features = out_features
+        self.radius = radius
         self.weight = Parameter(torch.Tensor(in_features,out_features))
         self.weight.data.uniform_(-1, 1).renorm_(2,1,1e-5).mul_(1e5)
 
@@ -70,15 +71,12 @@ class RegularLinear(nn.Module):
         w = self.weight # size=(F,Classnum) F=in_features Classnum=out_features
 
         ww = w.renorm(2,1,1e-5).mul(1e5)
-        xlen = x.pow(2).sum(1).pow(0.5) # size=B
-        wlen = ww.pow(2).sum(0).pow(0.5) # size=Classnum
 
+        if self.radius:
+           x = x.renorm(2,0,1e-5).mul(1e5)
+           x = x*self.radius
+       
         cos_theta = x.mm(ww) # size=(B,Classnum)
-        cos_theta = cos_theta / xlen.view(-1,1) / wlen.view(1,-1)
-        cos_theta = cos_theta.clamp(-1,1)
-
-        cos_theta = cos_theta * xlen.view(-1,1)
-        
         ww_dist = torch.transpose(ww,0,1).mm(ww)
         ww_dist_detach = ww_dist.detach()
         ww_dist_detach[range(self.out_features), range(self.out_features)] = -100
@@ -129,10 +127,11 @@ class AngleLoss(nn.Module):
 
 
 class sphere20a(nn.Module):
-    def __init__(self,classnum=10574,feature=False,head='softmax'):
+    def __init__(self,classnum=10574,feature=False,head='softmax', radius=None):
         super(sphere20a, self).__init__()
         self.classnum = classnum
         self.feature = feature
+        self.radius = radius
         #input = B*3*112*96
         self.conv1_1 = nn.Conv2d(3,64,3,2,1) #=>B*64*56*48
         self.relu1_1 = nn.PReLU(64)
@@ -189,7 +188,7 @@ class sphere20a(nn.Module):
         if head == 'a-softmax':
           self.fc6 = AngleLinear(512,self.classnum)
         if head == 'regular':
-          self.fc6 = RegularLinear(512, self.classnum)
+          self.fc6 = RegularLinear(512, self.classnum, self.radius)
 
     def forward(self, x):
         x = self.relu1_1(self.conv1_1(x))

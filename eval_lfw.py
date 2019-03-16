@@ -5,6 +5,7 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 from torch.autograd import Variable
+from torchvision.utils import save_image
 torch.backends.cudnn.bencmark = True
 
 import os,sys,cv2,random,datetime
@@ -97,8 +98,8 @@ for i in range(6000):
         name1 = p[0]+'/'+p[0]+'_'+'{:04}.jpg'.format(int(p[1]))
         name2 = p[2]+'/'+p[2]+'_'+'{:04}.jpg'.format(int(p[3]))
     
-    img1 = cv2.imread(os.path.join(args.lfw, name1))
-    img2 = cv2.imread(os.path.join(args.lfw, name2))
+    img1 = cv2.imread(os.path.join(args.lfw, name1))[...,::-1]
+    img2 = cv2.imread(os.path.join(args.lfw, name2))[...,::-1]
     imglist = [img1,cv2.flip(img1,1),img2,cv2.flip(img2,1)]
     for j in range(len(imglist)):
         imglist[j] = imglist[j].transpose(2,0,1).reshape((1,3,112,96))
@@ -113,6 +114,7 @@ for i in range(6000):
           imglist[j] = (imglist[j]-127.5)/128.0
     img = np.vstack(imglist)
     img = Variable(torch.from_numpy(img).float(),volatile=True).cuda()
+    save_image(img, 'test.png')
     output = net(img)
     f = output.data
     f1,f2 = f[0],f[2]
