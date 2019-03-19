@@ -176,3 +176,10 @@ def to_python_float(t):
         return t.item()
     else:
         return t[0]
+        
+def adjust_weight(epoch, args):
+    warmup = args.warmup
+    if epoch > warmup:
+      return args.reg_weight
+    return epoch / warmup * args.reg_weight
+

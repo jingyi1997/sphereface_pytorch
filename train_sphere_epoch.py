@@ -41,6 +41,7 @@ parser.add_argument('--distributed', default=False, type=str)
 parser.add_argument('--lr_steps', nargs='+', type=int)
 parser.add_argument('--lr_mults', default=0.1, type=float)
 parser.add_argument('--radius', default=None, type=float)
+parser.add_argument('--warmup', default=10, type=int)
 args = parser.parse_args()
 use_cuda = torch.cuda.is_available()
 
@@ -100,6 +101,8 @@ def main():
         criterion = torch.nn.CrossEntropyLoss().cuda()
     if args.loss_type == 'regular':
         criterion = torch.nn.CrossEntropyLoss().cuda()
+    if args.loss_type == 'as-regular':
+        criterion = net_sphere_2.AngleLoss().cuda()
     start_epoch = 0
     # optionally resume from a pretrained model
     if args.resume:
@@ -148,7 +151,6 @@ def train(net, epoch,train_loader, args, criterion, optimizer):
           lr = adjust_learning_rate(optimizer, epoch, args)
 
           data_time.update(time.time() - end)
-          save_image(input, 'train.png')
           output = net(input)
 
           
@@ -162,7 +164,14 @@ def train(net, epoch,train_loader, args, criterion, optimizer):
           if args.loss_type == 'regular':
               cos_theta, regular_loss = output
               loss = criterion(cos_theta, target)
-              loss = loss + args.reg_weight * regular_loss
+              reg_weight = adjust_weight(epoch, args)
+              loss = loss + reg_weight * regular_loss
+              prec1, prec5 = accuracy(cos_theta.data, target, topk=(1,5))
+          if args.loss_type == 'as-regular':
+              cos_theta, phi_theta, regular_loss = output
+              loss = criterion((cos_theta, phi_theta), target)
+              reg_weight = adjust_weight(epoch, args)
+              loss = loss + reg_weight * regular_loss
               prec1, prec5 = accuracy(cos_theta.data, target, topk=(1,5))
 
           if args.distributed:
@@ -200,8 +209,9 @@ def train(net, epoch,train_loader, args, criterion, optimizer):
                        batch_time=batch_time,
                        data_time=data_time, loss=losses, top1=top1, top5=top5, lr=lr)
 
-              if args.loss_type == 'regular':
-                      loss_info = loss_info + '\tReg Loss {regloss:.4f}'.format(regloss=regular_loss.data)
+              if args.loss_type == 'regular' or args.loss_type == 'as-regular':
+                      loss_info = loss_info + '\tReg Loss {regloss:.4f}' \
+                      '\tReg Weight {regweight:.4f}'.format(regloss=regular_loss.data, regweight=reg_weight)
               logger.info(loss_info)
 
   

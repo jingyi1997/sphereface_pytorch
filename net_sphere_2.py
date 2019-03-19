@@ -10,8 +10,18 @@ def myphi(x,m):
     return 1-x**2/math.factorial(2)+x**4/math.factorial(4)-x**6/math.factorial(6) + \
             x**8/math.factorial(8) - x**9/math.factorial(9)
 
+
+def gen_mask(ww, out_features):
+    ww_dist_detach = torch.transpose(ww,0,1).mm(ww)
+    ww_dist_detach[range(out_features), range(out_features)] = -100
+    _, indices = torch.max(ww_dist_detach, dim=0)
+    mask = torch.zeros_like(ww_dist_detach)
+    mask[range(out_features), indices] = 1
+    return mask
+
+
 class AngleLinear(nn.Module):
-    def __init__(self, in_features, out_features, m = 4, phiflag=True):
+    def __init__(self, in_features, out_features, m = 4, phiflag=True,reg=False):
         super(AngleLinear, self).__init__()
         self.in_features = in_features
         self.out_features = out_features
@@ -19,6 +29,7 @@ class AngleLinear(nn.Module):
         self.weight.data.uniform_(-1, 1).renorm_(2,1,1e-5).mul_(1e5)
         self.phiflag = phiflag
         self.m = m
+        self.reg = reg
         self.mlambda = [
             lambda x: x**0,
             lambda x: x**1,
@@ -53,7 +64,15 @@ class AngleLinear(nn.Module):
 
         cos_theta = cos_theta * xlen.view(-1,1)
         phi_theta = phi_theta * xlen.view(-1,1)
-        output = (cos_theta,phi_theta)
+        
+        # compute regular loss
+        if self.reg:
+            ww_dist = torch.transpose(ww,0,1).mm(ww)
+            mask = gen_mask(ww.detach(), self.out_features)
+            regular_loss = torch.dot(ww_dist.view(-1), mask.view(-1)) / self.out_features
+            output = (cos_theta, phi_theta,regular_loss)
+        else:
+            output = (cos_theta,phi_theta)
         return output # size=(B,Classnum,2)
 
 
@@ -77,14 +96,10 @@ class RegularLinear(nn.Module):
            x = x*self.radius
        
         cos_theta = x.mm(ww) # size=(B,Classnum)
+        ww_detach = ww.detach()
         ww_dist = torch.transpose(ww,0,1).mm(ww)
-        ww_dist_detach = ww_dist.detach()
-        ww_dist_detach[range(self.out_features), range(self.out_features)] = -100
-        _, indices = torch.max(ww_dist_detach, dim=0)
-        mask = torch.zeros_like(ww_dist_detach)
-        mask[range(self.out_features), indices] = 1
-        regular_loss = torch.dot(ww_dist_detach.view(-1), mask.view(-1)) / self.out_features
-        
+        mask = gen_mask(ww_detach, self.out_features) 
+        regular_loss = torch.dot(ww_dist.view(-1), mask.view(-1)) / self.out_features
          
         output = (cos_theta, regular_loss)
         return output # size=(B,Classnum,2)
@@ -186,9 +201,11 @@ class sphere20a(nn.Module):
         if head == 'softmax':
           self.fc6 = nn.Linear(512, self.classnum)
         if head == 'a-softmax':
-          self.fc6 = AngleLinear(512,self.classnum)
+          self.fc6 = AngleLinear(512,self.classnum, reg=False)
         if head == 'regular':
           self.fc6 = RegularLinear(512, self.classnum, self.radius)
+        if head == 'as-regular':
+          self.fc6 = AngleLinear(512, self.classnum, reg=True)
 
     def forward(self, x):
         x = self.relu1_1(self.conv1_1(x))
