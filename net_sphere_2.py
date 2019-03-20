@@ -11,7 +11,7 @@ def myphi(x,m):
             x**8/math.factorial(8) - x**9/math.factorial(9)
 
 
-def gen_mask(ww, out_features):
+def gen_mask(ww, out_features,top):
     ww_dist_detach = torch.transpose(ww,0,1).mm(ww)
     ww_dist_detach[range(out_features), range(out_features)] = -100
     _, indices = torch.max(ww_dist_detach, dim=0)
@@ -98,7 +98,7 @@ class RegularLinear(nn.Module):
         cos_theta = x.mm(ww) # size=(B,Classnum)
         ww_detach = ww.detach()
         ww_dist = torch.transpose(ww,0,1).mm(ww)
-        mask = gen_mask(ww_detach, self.out_features) 
+        mask = gen_mask(ww_detach, self.out_features, top=1) 
         regular_loss = torch.dot(ww_dist.view(-1), mask.view(-1)) / self.out_features
          
         output = (cos_theta, regular_loss)
