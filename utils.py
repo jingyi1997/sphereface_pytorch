@@ -1,10 +1,12 @@
 import torch
+import time
 import os
 import torch.distributed as dist
 import multiprocessing as mp
 import numpy as np
 import logging
-
+import matplotlib.pyplot as plt
+from scipy.io import savemat
 def create_logger(name, log_file, level=logging.INFO):
     l = logging.getLogger(name)
     formatter = logging.Formatter('[%(asctime)s][%(filename)15s][line:%(lineno)4d][%(levelname)8s] %(message)s')
@@ -178,8 +180,23 @@ def to_python_float(t):
         return t[0]
         
 def adjust_weight(epoch, args):
-    warmup = args.warmup
-    if epoch > warmup:
+    warmup = args.warmup_epochs
+    if epoch > warmup or args.reg == 'fix':
       return args.reg_weight
     return epoch / warmup * args.reg_weight
+ 
+def draw_plot(softmax_loss_record, regular_loss_record, iters, args):
+    fig, axes = plt.subplots(1,2,figsize=(12,4))
+    assert len(softmax_loss_record) == len(iters)
+    axes[0].plot(iters, softmax_loss_record)
+    axes[0].set_title('Softmax Loss')
+    if len(regular_loss_record) > 0:
+      axes[1].plot(iters, regular_loss_record)
+      axes[1].set_title('Regular Loss')
+    plt.savefig(os.path.join(args.ckpt, 'plots', '{}.png'.format(time.time())))
 
+def save_record(softmax_loss_record, reg_loss_record, args):
+    save_dict = {}
+    save_dict['softmax_loss'] = softmax_loss_record
+    save_dict['reg_loss_record'] = reg_loss_record
+    savemat(os.path.join(args.ckpt, 'plots', '{}.mat').format(time.time()), save_dict)

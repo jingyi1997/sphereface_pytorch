@@ -4,6 +4,7 @@ from torch.autograd import Variable
 import torch.nn.functional as F
 from torch.nn import Parameter
 import math
+import numpy as np
 
 def myphi(x,m):
     x = x * m
@@ -19,17 +20,83 @@ def gen_mask(ww, out_features,top):
     mask[range(out_features), indices] = 1
     return mask
 
+def gen_mask_topk(ww, out_features,top):
+    ww_dist_detach = torch.transpose(ww,0,1).mm(ww)
+    ww_dist_detach[range(out_features), range(out_features)] = -100
+    sorted, indices = torch.sort(ww_dist_detach, dim=1, descending=True)
+    mask = torch.zeros_like(ww_dist_detach)
+    indices = indices[:,:top]
 
-class AngleLinear(nn.Module):
-    def __init__(self, in_features, out_features, m = 4, phiflag=True,reg=False):
-        super(AngleLinear, self).__init__()
+    indices = indices.reshape(-1)
+    indices2 = np.arange(out_features).reshape(out_features,1)
+    indices2 = np.tile(indices2, (1, top))
+    indices2 = torch.from_numpy(indices2)
+    indices2 = indices2.reshape(-1)
+    mask[indices2,indices] = 1
+    return mask
+
+class ArcMarginProduct(nn.Module):
+    r"""Implement of large margin arc distance: :
+        Args:
+            in_features: size of each input sample
+            out_features: size of each output sample
+            s: norm of input feature
+            m: margin
+            cos(theta + m)
+        """
+    def __init__(self, in_features, out_features, m=0.50, easy_margin=False):
+        super(ArcMarginProduct, self).__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.m = m
+        self.weight = Parameter(torch.FloatTensor(out_features, in_features))
+        nn.init.xavier_uniform_(self.weight)
+
+        self.easy_margin = easy_margin
+        self.cos_m = math.cos(m)
+        self.sin_m = math.sin(m)
+        self.th = math.cos(math.pi - m)
+        self.mm = math.sin(math.pi - m) * m
+
+    def forward(self, input):
+        # --------------------------- cos(theta) & phi(theta) ---------------------------
+        cosine = F.linear(F.normalize(input), F.normalize(self.weight))
+        sine = torch.sqrt(1.0 - torch.pow(cosine, 2))
+        phi = cosine * self.cos_m - sine * self.sin_m
+        if self.easy_margin:
+            phi = torch.where(cosine > 0, phi, cosine)
+        else:
+            phi = torch.where(cosine > self.th, phi, cosine - self.mm)
+        return (cosine, phi)
+
+
+class ArcMarginLoss(nn.Module):
+    def __init__(self, s=30.0):
+        super(ArcMarginLoss, self).__init__()
+        self.s = s
+        self.criterion = nn.CrossEntropyLoss().cuda()
+
+    def forward(self, input, label):
+        cosine, phi = input
+        # --------------------------- convert label to one-hot ---------------------------
+        # one_hot = torch.zeros(cosine.size(), requires_grad=True, device='cuda')
+        one_hot = torch.zeros(cosine.size(), device='cuda')
+        one_hot.scatter_(1, label.view(-1, 1).long(), 1)
+        # -------------torch.where(out_i = {x_i if condition_i else y_i) -------------
+        output = (one_hot * phi) + ((1.0 - one_hot) * cosine)  # you can use torch.where if your torch.__version__ is 0.4
+        output *= self.s
+        loss = self.criterion(output, label)
+        return loss
+
+class SphereLinear(nn.Module):
+    def __init__(self, in_features, out_features, m = 4, phiflag=True):
+        super(SphereLinear, self).__init__()
         self.in_features = in_features
         self.out_features = out_features
         self.weight = Parameter(torch.Tensor(in_features,out_features))
         self.weight.data.uniform_(-1, 1).renorm_(2,1,1e-5).mul_(1e5)
         self.phiflag = phiflag
         self.m = m
-        self.reg = reg
         self.mlambda = [
             lambda x: x**0,
             lambda x: x**1,
@@ -38,6 +105,61 @@ class AngleLinear(nn.Module):
             lambda x: 8*x**4-8*x**2+1,
             lambda x: 16*x**5-20*x**3+5*x
         ]
+
+
+    def forward(self, input):
+        x = input   # size=(B,F)    F is feature len
+        w = self.weight # size=(F,Classnum) F=in_features Classnum=out_features
+
+        ww = w.renorm(2,1,1e-5).mul(1e5)
+        xlen = x.pow(2).sum(1).pow(0.5) # size=B
+        wlen = ww.pow(2).sum(0).pow(0.5) # size=Classnum
+
+        cos_theta = x.mm(ww) # size=(B,Classnum)
+        cos_theta = cos_theta / xlen.view(-1,1) / wlen.view(1,-1)
+        cos_theta = cos_theta.clamp(-1,1)
+
+        if self.phiflag:
+            cos_m_theta = self.mlambda[self.m](cos_theta)
+            theta = Variable(cos_theta.data.acos())
+            k = (self.m*theta/3.14159265).floor()
+            n_one = k*0.0 - 1
+            phi_theta = (n_one**k) * cos_m_theta - 2*k
+        else:
+            theta = cos_theta.acos()
+            phi_theta = myphi(theta,self.m)
+            phi_theta = phi_theta.clamp(-1*self.m,1)
+
+        cos_theta = cos_theta * xlen.view(-1,1)
+        phi_theta = phi_theta * xlen.view(-1,1)
+
+        output = (cos_theta, phi_theta)
+        return output
+
+class AngleLinear(nn.Module):
+    def __init__(self, in_features, out_features, m = 4, phiflag=True, top=1):
+        super(AngleLinear, self).__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.weight = Parameter(torch.Tensor(in_features,out_features))
+        self.weight.data.uniform_(-1, 1).renorm_(2,1,1e-5).mul_(1e5)
+        self.phiflag = phiflag
+        self.m = m
+        self.mlambda = [
+            lambda x: x**0,
+            lambda x: x**1,
+            lambda x: 2*x**2-1,
+            lambda x: 4*x**3-3*x,
+            lambda x: 8*x**4-8*x**2+1,
+            lambda x: 16*x**5-20*x**3+5*x
+        ]
+        self.top = top
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        #stdv = 1./math.sqrt(self.weight.size(1))
+        #self.weight.data.uniform_(-stdv, stdv)
+        torch.nn.init.xavier_uniform_(self.weight)
 
     def forward(self, input):
         x = input   # size=(B,F)    F is feature len
@@ -65,26 +187,29 @@ class AngleLinear(nn.Module):
         cos_theta = cos_theta * xlen.view(-1,1)
         phi_theta = phi_theta * xlen.view(-1,1)
         
-        # compute regular loss
-        if self.reg:
-            ww_dist = torch.transpose(ww,0,1).mm(ww)
-            mask = gen_mask(ww.detach(), self.out_features)
-            regular_loss = torch.dot(ww_dist.view(-1), mask.view(-1)) / self.out_features
-            output = (cos_theta, phi_theta,regular_loss)
-        else:
-            output = (cos_theta,phi_theta)
+        ww_detach = ww.detach()
+        ww_dist = torch.transpose(ww,0,1).mm(ww)
+        mask = gen_mask(ww_detach, self.out_features, top=self.top) 
+        regular_loss = torch.dot(ww_dist.view(-1), mask.view(-1)) / (self.out_features*self.top)
+        output = (cos_theta, phi_theta, regular_loss)
         return output # size=(B,Classnum,2)
 
 
-class RegularLinear(nn.Module):
-    def __init__(self, in_features, out_features, radius=None):
-        super(RegularLinear, self).__init__()
+class NormLinear(nn.Module):
+    def __init__(self, in_features, out_features, radius=None, top=1):
+        super(NormLinear, self).__init__()
         self.in_features = in_features
         self.out_features = out_features
         self.radius = radius
         self.weight = Parameter(torch.Tensor(in_features,out_features))
-        self.weight.data.uniform_(-1, 1).renorm_(2,1,1e-5).mul_(1e5)
+        self.top = top
+        self.reset_parameters()
 
+    def reset_parameters(self):
+        stdv = 1./math.sqrt(self.weight.size(0))
+        self.weight.data.uniform_(-stdv, stdv)
+
+        
     def forward(self, input):
         x = input   # size=(B,F)    F is feature len
         w = self.weight # size=(F,Classnum) F=in_features Classnum=out_features
@@ -96,24 +221,28 @@ class RegularLinear(nn.Module):
            x = x*self.radius
        
         cos_theta = x.mm(ww) # size=(B,Classnum)
+        output = (cos_theta)
+       
         ww_detach = ww.detach()
         ww_dist = torch.transpose(ww,0,1).mm(ww)
-        mask = gen_mask(ww_detach, self.out_features, top=1) 
-        regular_loss = torch.dot(ww_dist.view(-1), mask.view(-1)) / self.out_features
-         
+        mask = gen_mask(ww_detach, self.out_features, top=self.top) 
+        regular_loss = torch.dot(ww_dist.view(-1), mask.view(-1)) / (self.out_features*self.top)
         output = (cos_theta, regular_loss)
+                         
+
         return output # size=(B,Classnum,2)
 
     
     
 class AngleLoss(nn.Module):
-    def __init__(self, gamma=0):
+    def __init__(self,gamma=0.00003,power=5,LambdaMin=5, LambdaMax=1000):
         super(AngleLoss, self).__init__()
         self.gamma   = gamma
         self.it = 0
-        self.LambdaMin = 5.0
-        self.LambdaMax = 1500.0
+        self.LambdaMin = LambdaMin
+        self.LambdaMax = LambdaMax
         self.lamb = 1500.0
+        self.power = power
 
     def forward(self, input, target):
         self.it += 1
@@ -125,7 +254,7 @@ class AngleLoss(nn.Module):
         index = index.byte()
         index = Variable(index)
 
-        self.lamb = max(self.LambdaMin,self.LambdaMax/(1+0.1*self.it ))
+        self.lamb = max(self.LambdaMin,self.LambdaMax/(1+self.gamma*self.it )**self.power)
         output = cos_theta * 1.0 #size=(B,Classnum)
         output[index] -= cos_theta[index]*(1.0+0)/(1+self.lamb)
         output[index] += phi_theta[index]*(1.0+0)/(1+self.lamb)
@@ -133,20 +262,23 @@ class AngleLoss(nn.Module):
         logpt = F.log_softmax(output)
         logpt = logpt.gather(1,target)
         logpt = logpt.view(-1)
-        pt = Variable(logpt.data.exp())
+        #pt = Variable(logpt.data.exp())
 
-        loss = -1 * (1-pt)**self.gamma * logpt
-        loss = loss.mean()
+        #loss = -1 * (1-pt)**self.gamma * logpt
+        loss = -logpt.mean()
 
-        return loss
+        return loss, self.lamb
 
 
 class sphere20a(nn.Module):
-    def __init__(self,classnum=10574,feature=False,head='softmax', radius=None):
+    def __init__(self,classnum=10574,feature=False,head='softmax', radius=None, margin=0.5, easy_margin=True, top=1):
         super(sphere20a, self).__init__()
         self.classnum = classnum
         self.feature = feature
         self.radius = radius
+        self.easy_margin = easy_margin
+        self.margin = margin
+        self.top = top
         #input = B*3*112*96
         self.conv1_1 = nn.Conv2d(3,64,3,2,1) #=>B*64*56*48
         self.relu1_1 = nn.PReLU(64)
@@ -198,14 +330,19 @@ class sphere20a(nn.Module):
         self.relu4_3 = nn.PReLU(512)
 
         self.fc5 = nn.Linear(512*7*6,512)
+
+       
         if head == 'softmax':
           self.fc6 = nn.Linear(512, self.classnum)
         if head == 'a-softmax':
-          self.fc6 = AngleLinear(512,self.classnum, reg=False)
-        if head == 'regular':
-          self.fc6 = RegularLinear(512, self.classnum, self.radius)
-        if head == 'as-regular':
-          self.fc6 = AngleLinear(512, self.classnum, reg=True)
+          self.fc6 = AngleLinear(512,self.classnum,top=self.top)
+        if head == 'norm-regular':
+          self.fc6 = NormLinear(512, self.classnum, self.radius,top=self.top)
+        if head == 'arcface':
+          self.fc6 = ArcMarginProduct(512, self.classnum,m=self.margin,easy_margin=self.easy_margin)
+        if head == 'sphere':
+          self.fc6 = SphereLinear(512, self.classnum)
+       
 
     def forward(self, x):
         x = self.relu1_1(self.conv1_1(x))

@@ -64,6 +64,7 @@ args = parser.parse_args()
 
 predicts=[]
 net = getattr(net_sphere_2,args.net)(classnum=args.classnum,  head=args.loss_type)
+print(net)
 model_name = 'epoch_'+str(args.model)+'_ckpt.pth.tar'
 model_path = os.path.join(args.ckpt, 'checkpoints', model_name)
 #checkpoint = torch.load(model_path)['state_dict']
@@ -77,6 +78,7 @@ if args.distributed:
   net.load_state_dict(new_state_dict)
 else:
   checkpoint = torch.load(model_path)['state_dict']
+  #checkpoint = torch.load(model_path)
   net.load_state_dict(checkpoint)
 net.eval()
 net.feature = True
@@ -114,10 +116,12 @@ for i in range(6000):
           imglist[j] = (imglist[j]-127.5)/128.0
     img = np.vstack(imglist)
     img = Variable(torch.from_numpy(img).float(),volatile=True).cuda()
-    save_image(img, 'test.png')
+    #save_image(img, 'test.png')
     output = net(img)
     f = output.data
-    f1,f2 = f[0],f[2]
+    f0,f1,f2,f3 = f[0],f[1],f[2],f[3]
+    f1 = torch.cat((f0,f1))
+    f2 = torch.cat((f2,f3))
     cosdistance = f1.dot(f2)/(f1.norm()*f2.norm()+1e-5)
     print('Calculating pair {} in total pairs {}'.format(i, 6000))
     predicts.append('{}\t{}\t{}\t{}\n'.format(name1,name2,cosdistance,sameflag))
