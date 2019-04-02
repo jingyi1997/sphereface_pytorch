@@ -12,7 +12,7 @@ def myphi(x,m):
             x**8/math.factorial(8) - x**9/math.factorial(9)
 
 
-def gen_mask(ww, out_features,top):
+def gen_mask(ww, out_features):
     ww_dist_detach = torch.transpose(ww,0,1).mm(ww)
     ww_dist_detach[range(out_features), range(out_features)] = -100
     _, indices = torch.max(ww_dist_detach, dim=0)
@@ -22,6 +22,7 @@ def gen_mask(ww, out_features,top):
 
 def gen_mask_topk(ww, out_features,top):
     ww_dist_detach = torch.transpose(ww,0,1).mm(ww)
+    print(ww_dist_detach)
     ww_dist_detach[range(out_features), range(out_features)] = -100
     sorted, indices = torch.sort(ww_dist_detach, dim=1, descending=True)
     mask = torch.zeros_like(ww_dist_detach)
@@ -33,6 +34,14 @@ def gen_mask_topk(ww, out_features,top):
     indices2 = torch.from_numpy(indices2)
     indices2 = indices2.reshape(-1)
     mask[indices2,indices] = 1
+    return mask
+
+def gen_positive_mask(ww, out_features, threshold):
+    ww_dist_detach = torch.transpose(ww,0,1).mm(ww)
+    print(ww_dist_detach)
+    mask_pos= torch.ones([out_features, out_features]).cuda()
+    mask_neg= torch.zeros([out_features, out_features]).cuda()
+    mask = torch.where(ww_dist_detach>threshold, mask_pos, mask_neg)
     return mask
 
 class ArcMarginProduct(nn.Module):
@@ -137,7 +146,7 @@ class SphereLinear(nn.Module):
         return output
 
 class AngleLinear(nn.Module):
-    def __init__(self, in_features, out_features, m = 4, phiflag=True, top=1):
+    def __init__(self, in_features, out_features, m = 4, phiflag=True, positive=None, top=1):
         super(AngleLinear, self).__init__()
         self.in_features = in_features
         self.out_features = out_features
@@ -153,13 +162,14 @@ class AngleLinear(nn.Module):
             lambda x: 8*x**4-8*x**2+1,
             lambda x: 16*x**5-20*x**3+5*x
         ]
+        self.positive = positive
         self.top = top
         self.reset_parameters()
 
     def reset_parameters(self):
-        #stdv = 1./math.sqrt(self.weight.size(1))
-        #self.weight.data.uniform_(-stdv, stdv)
-        torch.nn.init.xavier_uniform_(self.weight)
+        stdv = 1./math.sqrt(self.weight.size(1))
+        self.weight.data.uniform_(-stdv, stdv)
+        #torch.nn.init.xavier_uniform_(self.weight)
 
     def forward(self, input):
         x = input   # size=(B,F)    F is feature len
@@ -189,7 +199,12 @@ class AngleLinear(nn.Module):
         
         ww_detach = ww.detach()
         ww_dist = torch.transpose(ww,0,1).mm(ww)
-        mask = gen_mask(ww_detach, self.out_features, top=self.top) 
+        if self.positive:
+            mask = gen_positive_mask(ww_detach, self.out_features, self.positive)
+        elif self.top>1:
+            mask = gen_mask_topk(ww_detach, self.out_features, self.top)
+        else:
+            mask = gen_mask(ww_detach, self.out_features) 
         regular_loss = torch.dot(ww_dist.view(-1), mask.view(-1)) / (self.out_features*self.top)
         output = (cos_theta, phi_theta, regular_loss)
         return output # size=(B,Classnum,2)
@@ -271,7 +286,7 @@ class AngleLoss(nn.Module):
 
 
 class sphere20a(nn.Module):
-    def __init__(self,classnum=10574,feature=False,head='softmax', radius=None, margin=0.5, easy_margin=True, top=1):
+    def __init__(self,classnum=10574,feature=False,head='softmax', radius=None, margin=0.5, easy_margin=True, positive=None, top=1, dropoutFC=None):
         super(sphere20a, self).__init__()
         self.classnum = classnum
         self.feature = feature
@@ -279,6 +294,8 @@ class sphere20a(nn.Module):
         self.easy_margin = easy_margin
         self.margin = margin
         self.top = top
+        self.positive = positive
+        self.dropoutFC = dropoutFC
         #input = B*3*112*96
         self.conv1_1 = nn.Conv2d(3,64,3,2,1) #=>B*64*56*48
         self.relu1_1 = nn.PReLU(64)
@@ -330,12 +347,12 @@ class sphere20a(nn.Module):
         self.relu4_3 = nn.PReLU(512)
 
         self.fc5 = nn.Linear(512*7*6,512)
-
+        self.dropout = nn.Dropout(p=0.5)
        
         if head == 'softmax':
           self.fc6 = nn.Linear(512, self.classnum)
         if head == 'a-softmax':
-          self.fc6 = AngleLinear(512,self.classnum,top=self.top)
+          self.fc6 = AngleLinear(512,self.classnum, positive=self.positive, top=self.top)
         if head == 'norm-regular':
           self.fc6 = NormLinear(512, self.classnum, self.radius,top=self.top)
         if head == 'arcface':
@@ -361,9 +378,13 @@ class sphere20a(nn.Module):
         x = self.relu4_1(self.conv4_1(x))
         x = x + self.relu4_3(self.conv4_3(self.relu4_2(self.conv4_2(x))))
 
+
         x = x.view(x.size(0),-1)
         x = self.fc5(x)
         if self.feature: return x
+
+        if self.dropoutFC:
+          x = self.dropout(x)
 
         x = self.fc6(x)
         return x

@@ -8,6 +8,7 @@ from torchvision.utils import save_image
 import torch.nn.functional as F
 from torch.utils.data import distributed
 from torch.autograd import Variable
+from tensorboardX import SummaryWriter
 torch.backends.cudnn.bencmark = True
 
 import os,sys,cv2,random,datetime
@@ -22,7 +23,7 @@ import torchvision.transforms as transforms
 from utils import *
 import net_sphere_2
 from verify_LFW import verify_LFW
-
+import shutil
 parser = argparse.ArgumentParser(description='PyTorch sphereface')
 parser.add_argument('--net','-n', default='sphere20a', type=str)
 parser.add_argument('--base_lr', default=0.1, type=float, help='learning rate')
@@ -35,6 +36,7 @@ parser.add_argument('--loss_type', default='softmax', type=str)
 parser.add_argument('--transforms', default='softmax', type=str)
 parser.add_argument('--epochs', default=20, type=int)
 parser.add_argument('--top', default=1, type=int)
+parser.add_argument('--positive', default=None, type=float)
 parser.add_argument('--save_freq', default=1000, type=str)
 parser.add_argument('--print_freq', default=10, type=int)
 parser.add_argument('--resume', default=-1, type=int)
@@ -48,8 +50,10 @@ parser.add_argument('--margin', default=0.5, type=float)
 parser.add_argument('--LambdaMax', default=1000, type=float)
 parser.add_argument('--easy_margin', default=True, type=str)
 parser.add_argument('--radius', default=None, type=float)
+parser.add_argument('--start_reg', default=0, type=int)
 parser.add_argument('--pretrained', default=None, type=str)
 parser.add_argument('--warmup_epochs', default=10, type=int)
+parser.add_argument('--dropout', default=None, type=str)
 parser.add_argument('--reg', default='warmup', type=str)
 parser.add_argument('--reg_weight', default=15, type=float)
 args = parser.parse_args()
@@ -59,7 +63,7 @@ use_cuda = torch.cuda.is_available()
 
 def main():
 
-    global  rank, world_size, softmax_loss_record, reg_loss_record, iters
+    global  rank, world_size, softmax_loss_record, reg_loss_record, iters, writer
     if args.distributed:
       rank, world_size = dist_init("1234")
     else:
@@ -75,6 +79,9 @@ def main():
          os.makedirs('{}/logs'.format(args.ckpt))
       if not os.path.exists('{}/plots'.format(args.ckpt)):
          os.makedirs('{}/plots'.format(args.ckpt))
+      if os.path.exists('{}/runs'.format(args.ckpt)):
+         shutil.rmtree('{}/runs'.format(args.ckpt))
+      os.makedirs('{}/runs'.format(args.ckpt))
 
     softmax_loss_record = []
     reg_loss_record = []
@@ -83,6 +90,7 @@ def main():
     if rank == 0:
        logger = create_logger('global_logger', '{}/logs/{}.txt'.format(args.ckpt,time.time()))
        logger.info('{}'.format(args))
+       writer = SummaryWriter('{}/runs'.format(args.ckpt))
     else:
        logger = None
     
@@ -106,9 +114,9 @@ def main():
 
     # create model
     print("=> creating model '{}'".format(args.net))
-    net = getattr(net_sphere_2,args.net)(classnum=args.classnum, head=args.loss_type, radius=args.radius, margin=args.margin, easy_margin=args.easy_margin, top=args.top)
+    net = getattr(net_sphere_2,args.net)(classnum=args.classnum, head=args.loss_type, radius=args.radius, margin=args.margin, easy_margin=args.easy_margin, positive=args.positive, top=args.top, dropoutFC=args.dropout)
     net = net.cuda()
-
+    print(net)
     if args.distributed:
        net = DDP(net)
     
@@ -155,7 +163,7 @@ def main():
 
     draw_plot(softmax_loss_record, reg_loss_record, iters, args) 
     save_record(softmax_loss_record, reg_loss_record, args) 
-
+    writer.close()
 
 
 
@@ -224,7 +232,7 @@ def train(net, epoch,train_loader, args, criterion, optimizer):
           end = time.time()
           input, target = prefetcher.next()
               
-          if rank == 0 and i % args.print_freq == 0 and i > 1:
+          if rank == 0 and i % args.print_freq == 0:
               niters = epoch * len(train_loader) + i
               iters.append(niters)
               logger = logging.getLogger('global_logger')
@@ -239,11 +247,13 @@ def train(net, epoch,train_loader, args, criterion, optimizer):
                        batch_time=batch_time,
                        data_time=data_time, loss=losses, top1=top1, top5=top5, lr=lr)
               softmax_loss_record.append(softmax_loss.data.item())
+              writer.add_scalar('softmax_loss', softmax_loss.data.item(), niters)
               if args.loss_type == 'norm-regular' or args.loss_type == 'a-softmax':
                 loss_info = loss_info + '\tRegLoss {reg_loss:.3f}' \
                            '\tRegWeight {regweight:.3f}' \
                            '\tSoftmax Loss {softmaxloss:.3f}'.format(reg_loss=regular_loss.item(),regweight=regular_weight, softmaxloss=softmax_loss.data.item())
                 reg_loss_record.append(regular_loss.item())
+                writer.add_scalar('reg_loss', regular_loss.item(), niters)
               if args.loss_type == 'a-softmax':
                 loss_info = loss_info + '\tLamda {lamda: .3f}'.format(lamda=lamda)
 
