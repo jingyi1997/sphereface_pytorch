@@ -181,9 +181,11 @@ def to_python_float(t):
         
 def adjust_weight(epoch, args):
     warmup = args.warmup_epochs
-    if epoch > warmup or args.reg == 'fix':
+    if epoch > int(warmup+args.start_reg) or args.reg == 'fix':
       return args.reg_weight
-    return epoch / warmup * args.reg_weight
+    if epoch < args.start_reg:
+      return 0
+    return int(epoch-args.start_reg) / warmup * args.reg_weight
  
 def draw_plot(softmax_loss_record, regular_loss_record, iters, args):
     fig, axes = plt.subplots(1,2,figsize=(12,4))

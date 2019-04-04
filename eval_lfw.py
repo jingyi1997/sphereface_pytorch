@@ -70,6 +70,7 @@ model_path = os.path.join(args.ckpt, 'checkpoints', model_name)
 #checkpoint = torch.load(model_path)['state_dict']
 net.cuda()
 if args.distributed:
+  checkpoint = torch.load(model_path)['state_dict']
   from collections import OrderedDict
   new_state_dict = OrderedDict()
   for k, v in checkpoint.items():
